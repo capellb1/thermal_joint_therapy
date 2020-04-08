@@ -1,0 +1,4 @@
+INFO: [VRFC 10-2263] Analyzing Verilog file "D:/TCNJ/Academics/Courses/Senior_Year/Senior Project/TJT/Simulation/tjt_verify/tjt_verify.srcs/sources_1/new/tjt_dlc.v" into library xil_defaultlib
+INFO: [VRFC 10-311] analyzing module tjt_dlc
+INFO: [VRFC 10-2263] Analyzing Verilog file "D:/TCNJ/Academics/Courses/Senior_Year/Senior Project/TJT/Simulation/tjt_verify/tjt_verify.srcs/sim_1/new/dlc_test.v" into library xil_defaultlib
+INFO: [VRFC 10-311] analyzing module dlc_test

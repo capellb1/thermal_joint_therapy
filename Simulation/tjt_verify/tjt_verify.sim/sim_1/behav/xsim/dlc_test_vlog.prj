@@ -1,0 +1,10 @@
+# compile verilog/system verilog design source files
+verilog xil_defaultlib  \
+"../../../../tjt_verify.srcs/sources_1/new/tjt_dlc.v" \
+"../../../../tjt_verify.srcs/sim_1/new/dlc_test.v" \
+
+# compile glbl module
+verilog xil_defaultlib "glbl.v"
+
+# Do not sort compile order
+nosort
