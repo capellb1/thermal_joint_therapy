@@ -1,6 +1,6 @@
 //Thermal Joint Therapy, TCNJ Senior Project 2019-2020
 //Author: Blake Capella
-//tjt_mcu v1; 3/4/2020
+//tjt_mcu v2; 4/20/2020
 //-----------------------------------------------------
 
 //Pin Layout (these are global declarations)
@@ -38,46 +38,24 @@ const int safetyPin = 3;
 const double e = 2.71828;
 
 //Temperature Variables
-double temperatures[5] = {};  //arrays of sampled temperatures
-double hand_temp_watch = 0;   //hand temp safety monitoring
-double hand_temp_previous = 0;
-int count_outside = 0;
-double heat_lvl; //Setpoint for temp in hot resevoir
-double cool_lvl; //Setpoint for temp in cool resevoir
+double temperatures[5] = {};
 volatile bool emergency_thrown = false; //Manipulated in ISR, declares DPDT switch has been thrown
                                         //This is the only time in the program emergy_thrown is reset!
 bool hand_temp_unsafe = false;          //Flag for if Hand Temp exceeds bounds
                                         //This is the only time in the program hand_temp_unsafe is reset!
 bool S = false; //if unsafe, flag goes high
 
-//Digital Logic Variables
-//-Outputs
-bool P1 = false;  //pump 1
-bool P2 = false;  //pump 2
-bool G1 = false;  //gate 1
-bool G2 = false;  //gate 2
-bool G3 = false;  //gate 3
-bool G4 = false;  //gate 4
-
 //-inputs
-bool Pd = false;  //Pumpout done
 bool B = true;   //Begin as soon as ready, potentially  make button at later date
-                 //This is the only time B is set HIGH in the entire program! Therapy will only run once
-bool time_h = false; //Heat cycle time elapsed
-bool time_c = false; //Cool cycle time elapsed
-bool time_d = false; //treatment time elapsed
+               //This is the only time B is set HIGH in the entire program! Therapy will only run once
 
 //-timing for inputs
-int treat_count = 0;
-unsigned long t_start;
-bool t_cycle_set = false;
 const long T_HEAT = 1000*360;     //heat cycle = 6 min
 const long T_COOL = 1000*240;     //cool cycle = 4 min
 const long T_EVAC = 1000*30;      //evac cycle = 30 sec
 const long led_g_interval = 1000; //Toggle LED every X ms -> 1sec
 
 //-state check
-bool evac_cycle;
 bool STBY;
 
 //Setup Code
@@ -88,8 +66,8 @@ void setup() {
   bool cold = false; // preheat complete for cool resevoir
   int count_cold = 0; // int to record number of successive determinations of SS
   int count_hot = 0;
-  heat_lvl = 42; //Setpoint for Preheat in resevoir
-  cool_lvl = 16; //Setpoint for Precool in resevoir
+  int heat_lvl = 42; //Setpoint for Preheat in resevoir
+  int cool_lvl = 16; //Setpoint for Precool in resevoir
   double temperature_history[5] = {}; //store old temperature values in array
   double delta[2] = {};               //store difference in temperature values this sample with the previous sample
   double delta_history[2] = {};
@@ -303,71 +281,47 @@ void controller(double *ptr_heat_lvl, double *ptr_cool_lvl) {
   //TODO implement controller
 }
 
-void safety_isr(){
-  //to make sure values are passed from ISR to main program, declare variables as volatile
-  
-  //Red LED indicator
-  digitalWrite(ledRPin, HIGH);
-  
-  //Power to Heat/Cool already manually interrupted by switch, as good practice, set MCU output to 0
-  digitalWrite(heatContPin, LOW);
-  digitalWrite(coolContPin, LOW);
-
-  emergency_thrown = true;
-  
-  Serial.write("Stop Treatment Button Pressed");
-}
-
-void loop() {
-  // put your main code here, to run repeatedly:
-  // TODO: test loop time therefore MCU sampling freq
-
-  //Sample Temperature Values
-  sense_temps(temperatures);
-  hand_temp_watch = max(max(temperatures[1],temperatures[2]),temperatures[3]);
-
+void auto_safety(double temperatures[]){
   //Automatic Safety Shutoff Detection
-  if(hand_temp_watch >= 45 && hand_temp_previous >= 45){ //if hand temp is over 45 and was over 45 last sample
+  double hand_temp_watch = 0;   //hand temp safety monitoring
+  int count_outside = 0;
+  
+  hand_temp_watch = max(max(temperatures[1],temperatures[2]),temperatures[3]);
+  
+  if(hand_temp_watch >= 45){ //if hand temp is over 45
     count_outside = count_outside + 1;
     if (count_outside >= 5){  // if max temp on the hand is above 45 for more than 5 samples in a row, throw a flag
       hand_temp_unsafe = true;  //Variable never reset in program!
     }
   }
-  else if(hand_temp_watch <= 15 && hand_temp_previous <= 15){ //if hand temp is under 15 and was under 15 last sample
+  else if(hand_temp_watch <= 15 ){ //if hand temp is under 15
     count_outside = count_outside + 1;
     if (count_outside >= 5){  // if max temp on the hand is above 45 for more than 5 samples in a row, throw a flag
      hand_temp_unsafe = true; //Variable never reset in program!
     }
   }
-  
-  if(!hand_temp_unsafe){
-    //Use Controller to determine set-point for on/off control
-    controller(&heat_lvl,&cool_lvl);
-  
-    //Pass setpoint to on/off controllers
-    heat(heat_lvl);
-    cool(cool_lvl);
+  else{
+    count_outside = 0;  //if the temperature drops below the thresholds, reset the count
   }
-  else {  // if hand_temp_unsafe, set all outputs to zero
-    digitalWrite(heatContPin, LOW);
-    digitalWrite(coolContPin, LOW);
-  }
-  
+}
+
+void dlc_timer(bool *time_h, bool *time_c, bool *time_d, bool *Pd, bool evac_cycle){
   //Digital Logic Control for Pumps/Gates for STBY, Heat Mode, Cool Mode, and Bladder Evac
-  evac_cycle = !P1 && P2 && !G1 && !G2; //State 01 00XX -> evacuating bladder
-  S = hand_temp_unsafe || emergency_thrown;
+  int treat_count = 0;
+  unsigned long t_start;
+  bool t_cycle_set = false;
   
   //Normal Treatment Cycle Timing
-  if (treat_count < 6 && !STBY){             // 6 cycles total, 3 hot, 3 cold, total time = 30 min
+  if (treat_count < 6){             // 6 cycles total, 3 hot, 3 cold, total time = 30 min
     digitalWrite(ledYPin, HIGH);     // Yellow LED to indicate treatment
-    if(treat_count%2 == 1 &&!t_cycle_set){   // if odd count (1,3,5) -> entering cooling stage, start count for cool cycle
+    if(treat_count%2 == 1 && !t_cycle_set){   // if odd count (1,3,5) -> entering cooling stage, start count for cool cycle
       t_start = millis();
-      time_h = false;                // turn off flag for heat timer elapse
+      *time_h = false;                // turn off flag for heat timer elapse
       t_cycle_set = true;            // declare timer has begun counting
     }
-    else if(treat_count%2 == 1 && t_cycle_set){     //otherwise if in cool cycle and timer already started, check if time elapses against specified T_COOL = 4 min
-      if((t_start - millis()) >= T_COOL){
-        time_c = true;              //flag transition by declaring cool time elapsed
+    else if(treat_count%2 == 1){     //otherwise if in cool cycle and timer already started, check if time elapses against specified T_COOL = 4 min
+      if((millis()- t_start) >= T_COOL){
+        *time_c = true;              //flag transition by declaring cool time elapsed
         t_cycle_set = false;        //essentially reset cycle timer
         treat_count = treat_count + 1;  //increment treatment cycle count
       }
@@ -375,12 +329,12 @@ void loop() {
   
     if(treat_count%2 == 0 && !t_cycle_set){  // if even count (0,2,4) -> entering heating stage, start count for heat cycle
       t_start = millis();
-      time_c = false;                 // turn off flag for cool timer elapse
+      *time_c = false;                 // turn off flag for cool timer elapse
       t_cycle_set = true;             // declare timer has begun counting
     }
-    else if(treat_count%2 == 0 && t_cycle_set){            //otherwise if in cool cycle and timer already started, check if time elapses against specified T_HEAT = 6 min
-      if((t_start - millis()) >= T_HEAT){
-        time_h = true;                //flag transition by declaring heat time elapsed
+    else if(treat_count%2 == 0){            //otherwise if in cool cycle and timer already started, check if time elapses against specified T_HEAT = 6 min
+      if((millis() - t_start) >= T_HEAT){
+        *time_h = true;                //flag transition by declaring heat time elapsed
         t_cycle_set = false;          //essentially reset cycle timer
         treat_count = treat_count + 1;   //increment treatment cycle count
         B = false;                    //Reset B to 0 after the first heat cycle (originally set high in varaible defintion)
@@ -388,21 +342,74 @@ void loop() {
     }
   }
   else {
-    time_d = true;  //if treat count >= 5, then cycle is complete. Flag high transition to evacuate & end cycle
+    *time_d = true;  //if treat count >= 5, then cycle is complete. Flag high transition to evacuate & end cycle
   }
-
-  //Evacuation Cycle Timing
+  //Evacuation Cycle Timing  
   if(evac_cycle && !t_cycle_set){ // if evacuating, begin timer
     t_start = millis();
-    time_d = false;  //reset time elapse signal (reset S?)
+    *time_d = false;  //reset time elapse signal (reset S?)
     t_cycle_set = true;
   }
-  else if (evac_cycle && t_cycle_set){  //if evacuating and timer already begun, check time against T_EVAC to determine if pumpout complete
-    if ((t_start - millis()) >= T_EVAC){
-      Pd = true;      //signal pumpout elapsed with high flag
+  else if (evac_cycle ){  //if evacuating and timer already begun, check time against T_EVAC to determine if pumpout complete
+    if ((millis() - t_start) >= T_EVAC){
+      *Pd = true;      //signal pumpout elapsed with high flag
       t_cycle_set  = false;
       STBY = true;    //One of two spots STBY can be entered from (end of evac)
     }
+  }
+}
+
+void safety_isr(){
+  emergency_thrown = true;
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  //Control Variables
+  double heat_lvl; //Setpoint for temp in hot resevoir
+  double cool_lvl; //Setpoint for temp in cool resevoir
+  
+  //Digital Logic Variables
+  //-Outputs
+  bool P1 = false;  //pump 1
+  bool P2 = false;  //pump 2
+  bool G1 = false;  //gate 1
+  bool G2 = false;  //gate 2
+  bool G3 = false;  //gate 3
+  bool G4 = false;  //gate 4
+  //-Timing
+  bool time_h = false; //Heat cycle time elapsed
+  bool time_c = false; //Cool cycle time elapsed
+  bool time_d = false; //treatment time elapsed
+  bool Pd = false;  //Pumpout done
+  bool evac_cycle;
+  
+  // TODO: test loop time therefore MCU sampling freq
+
+  //Sample Temperature Values
+  sense_temps(temperatures);
+  
+  //Run Auto Safety Check
+  auto_safety(temperatures);
+
+  //Check for ISR trigger or Auto Safety Flag
+  S = hand_temp_unsafe || emergency_thrown;
+  
+  if(!S){
+    //Use Controller to determine set-point for on/off control
+    controller(&heat_lvl,&cool_lvl);
+  
+    //Pass setpoint to on/off controllers
+    heat(heat_lvl);
+    cool(cool_lvl);
+  }
+  else {
+    //Red LED indicator
+    digitalWrite(ledRPin, HIGH);
+    
+    //Power to Heat/Cool interrupted by switch or if triggered by auto-safety, set MCU output to 0
+    digitalWrite(heatContPin, LOW);
+    digitalWrite(coolContPin, LOW);
   }
 
   //Standby actions
@@ -416,16 +423,20 @@ void loop() {
       digitalWrite(ledGPin, LOW); //turn off LED
     }
   }
-
+  else{
+    evac_cycle = !P1 && P2 && !G1 && !G2; //State 01 00XX -> evacuating bladder
+    dlc_timer(&time_h,&time_c,&time_d,&Pd,evac_cycle);
+  }
+  
   //STATES
-  //-Output State Transition Equations (VERIFIED)
+  //-Output State Transition Equations
   P1 = (!S)&&(!time_d)&&(P1 || B);
   P2 = (!Pd)&&(P2 || B);
   G1 = (!time_h)&&(!S)&&(G1 || B || (time_c && !S));
   G2 = (!time_c)&&(!S)&&(!time_d)&&(G2 || (time_h && !S));
   G3 = (!(time_h && !S))&&(!Pd)&&(G3 || B || (time_c && !S));
   G4 = (!(time_c && !S))&&(!Pd)&&(G4 || (time_h && !S));
-
+  
   //Assign output states
   digitalWrite(gate4Pin,G4);
   digitalWrite(gate3Pin,G3);
